@@ -1,16 +1,15 @@
 const $ = id => document.getElementById(id);
 const input = $('videoInput'), video = $('preview'), editor = $('editor'), notice = $('notice');
 let objectUrl = null, clips = [], duration = 0, installPrompt = null;
-let transcriber = null, transcriptReady = false, aiBusy = false;
+let worker = null, workerReady = false, workerLoading = false, pendingAudio = null;
+let aiBusy = false;
 
 function time(s) {
   s = Math.max(0, Number(s) || 0);
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 }
-function setAiStatus(message) {
-  const el = $('aiStatus');
-  if (el) el.textContent = message;
-}
+function setAiStatus(message) { $('aiStatus').textContent = message; }
+
 input.addEventListener('change', () => {
   const f = input.files?.[0];
   if (!f) return;
@@ -23,10 +22,9 @@ input.addEventListener('change', () => {
   $('startTime').value = 0;
   $('endTime').value = 15;
   clips = [];
-  transcriptReady = false;
   render();
-  setAiStatus('AI engine not loaded. Tap Find moments to download the small Whisper model.');
-  notice.textContent = 'Video loaded locally. AI analysis runs in your browser; the first model download can be large and slow.';
+  setAiStatus('AI runs in a background worker. For analysis, select a separate audio-only file (MP3, WAV or M4A) to avoid decoding heavy 4K video on this laptop.');
+  notice.textContent = 'Video loaded locally. Manual clipping still uses the video. AI transcription uses a separate audio file to keep the page responsive.';
 });
 video.addEventListener('loadedmetadata', () => {
   duration = video.duration || 0;
@@ -38,10 +36,9 @@ video.addEventListener('loadedmetadata', () => {
 $('removeVideo').onclick = () => {
   video.pause(); video.removeAttribute('src'); video.load();
   if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = null; editor.classList.add('hidden'); input.value = ''; clips = [];
-  transcriptReady = false; render();
+  objectUrl = null; editor.classList.add('hidden'); input.value = ''; clips = []; render();
 };
-$('urlBtn').onclick = () => alert('Direct URL importing is not included yet. Upload a video file you own or are authorized to use.');
+$('urlBtn').onclick = () => alert('Direct URL importing is not included yet. Upload a video you own or are authorized to use.');
 $('mode').onchange = () => { $('categories').style.display = $('mode').value === 'guided' ? 'flex' : 'none'; };
 $('addClip').onclick = () => {
   const start = Math.max(0, Number($('startTime').value) || 0);
@@ -60,100 +57,132 @@ const KEYWORDS = {
   'Memorable dialogue': ['remember', 'listen', 'the truth', 'never forget', 'i told you', 'you know what', 'because']
 };
 
-async function getTranscriber() {
-  if (transcriber) return transcriber;
-  setAiStatus('Loading Transformers.js and Whisper tiny model. Keep this tab open; first download may take a while.');
-  const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2');
-  env.allowLocalModels = false;
-  env.useBrowserCache = true;
-  env.backends.onnx.wasm.numThreads = 1;
-  transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-tiny', {
-    dtype: 'q8',
-    device: 'wasm',
-    progress_callback: p => {
-      if (p.status === 'progress' && p.file) {
-        const pct = p.progress ? ` ${Math.round(p.progress)}%` : '';
-        setAiStatus(`Downloading AI model: ${p.file}${pct}`);
-      } else if (p.status) setAiStatus(`Preparing AI model: ${p.status}`);
+function ensureWorker() {
+  if (worker) return;
+  worker = new Worker('./ai-worker.js', { type: 'module' });
+  worker.onmessage = event => {
+    const d = event.data || {};
+    if (d.type === 'status') setAiStatus(d.message);
+    if (d.type === 'model-progress') {
+      const pct = Number.isFinite(d.progress) ? ` ${Math.round(d.progress)}%` : '';
+      setAiStatus(`Downloading ${d.file}${pct}. First download can be large; this runs in the background.`);
     }
-  });
-  return transcriber;
+    if (d.type === 'ready') {
+      workerReady = true; workerLoading = false;
+      setAiStatus('Whisper Tiny is ready. Select an audio file and press Find moments.');
+      if (pendingAudio) runAudioTranscription(pendingAudio);
+    }
+    if (d.type === 'transcribe-progress') setAiStatus(d.message || 'Transcribing…');
+    if (d.type === 'transcript') {
+      aiBusy = false;
+      $('detectBtn').disabled = false;
+      $('detectBtn').textContent = '✦ Find moments';
+      $('transcriptText').textContent = d.text || 'No speech was recognised.';
+      $('transcriptPanel').classList.remove('hidden');
+      const suggestions = makeSuggestions(d.chunks || [], pendingAudio?.duration || duration);
+      suggestions.forEach((s, i) => clips.push({
+        id: Date.now() + i + Math.random(), title: s.title,
+        start: s.start, end: s.end, category: `AI suggestion · ${s.category}`
+      }));
+      render();
+      setAiStatus(`Transcription complete. ${suggestions.length} keyword-based clip suggestions added. Review each suggestion; these are not verified funny moments.`);
+      notice.textContent = suggestions.length
+        ? 'AI transcript and candidate clips are ready. The suggestions use speech keywords only, so review them before exporting.'
+        : 'Transcription finished, but no matching keyword highlights were found. You can still create manual cuts.';
+      pendingAudio = null;
+    }
+    if (d.type === 'error') {
+      aiBusy = false; workerLoading = false; pendingAudio = null;
+      $('detectBtn').disabled = false;
+      $('detectBtn').textContent = '✦ Find moments';
+      setAiStatus('AI worker reported an error.');
+      notice.textContent = `AI error: ${d.message}. Try a shorter MP3/WAV audio file or reload the page.`;
+    }
+  };
+  worker.onerror = e => {
+    aiBusy = false; workerLoading = false;
+    $('detectBtn').disabled = false; $('detectBtn').textContent = '✦ Find moments';
+    setAiStatus('AI background worker failed to start.');
+    notice.textContent = `Worker error: ${e.message || 'Could not start AI worker'}. Refresh the page and try again.`;
+  };
 }
 
-async function extractMonoAudio(file) {
-  // Browsers cannot reliably decode an MP4/WebM video file directly with
-  // decodeAudioData. Capture its audio track while the video plays instead.
-  if (!video.captureStream || !window.MediaRecorder) {
-    throw new Error('This Chrome version cannot capture audio from the video. Update Chrome and retry.');
+function loadWorker() {
+  ensureWorker();
+  if (workerReady || workerLoading) return;
+  workerLoading = true;
+  setAiStatus('Starting background AI worker and loading Whisper Tiny…');
+  worker.postMessage({ type: 'load' });
+}
+
+$('chooseAudioBtn').onclick = () => $('audioInput').click();
+$('audioInput').addEventListener('change', () => {
+  const file = $('audioInput').files?.[0];
+  if (!file) return;
+  if (file.size > 80 * 1024 * 1024) {
+    notice.textContent = 'For this laptop-friendly test, choose audio under 80 MB.';
+    $('audioInput').value = '';
+    return;
   }
-  const originalTime = video.currentTime;
-  const wasMuted = video.muted;
-  video.pause();
-  video.muted = false;
-  video.currentTime = 0;
-  await new Promise(resolve => {
-    if (video.readyState >= 2 && video.currentTime === 0) resolve();
-    else video.addEventListener('seeked', resolve, { once: true });
-  });
-  const source = video.captureStream();
-  const audioTracks = source.getAudioTracks();
-  if (!audioTracks.length) {
-    source.getTracks().forEach(t => t.stop());
-    video.muted = wasMuted;
-    throw new Error('No audio track was found in this video.');
+  $('audioFileName').textContent = `Selected AI audio: ${file.name}`;
+  pendingAudio = { file, duration: 0 };
+  setAiStatus('Audio selected. Click Find moments to transcribe it in the background.');
+  notice.textContent = 'For best results, choose audio extracted from the same video loaded above. The separate audio file avoids decoding a 4K video during AI analysis.';
+});
+
+$('detectBtn').onclick = async () => {
+  if (aiBusy) return;
+  if (!input.files?.[0]) { notice.textContent = 'Choose a video first so suggested timestamps can be clipped from it.'; return; }
+  const file = $('audioInput').files?.[0];
+  if (!file) {
+    notice.textContent = 'Please select an audio-only file (MP3, WAV or M4A) using Choose audio for AI. A 4K video can overload a slow laptop during audio extraction.';
+    $('audioInput').click();
+    return;
   }
-  const audioStream = new MediaStream(audioTracks);
-  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
-    .find(type => MediaRecorder.isTypeSupported(type));
-  if (!mime) {
-    source.getTracks().forEach(t => t.stop());
-    video.muted = wasMuted;
-    throw new Error('This browser cannot record the video audio track.');
+  aiBusy = true; $('detectBtn').disabled = true; $('detectBtn').textContent = '◌ Analysing…';
+  try {
+    setAiStatus('Decoding the selected audio file…');
+    const decoded = await decodeAudioFile(file);
+    pendingAudio = { audio: decoded.audio, duration: decoded.duration };
+    if (!workerReady) {
+      ensureWorker(); workerLoading = true;
+      setAiStatus('Starting the background worker and downloading Whisper Tiny. You can still use the page while it loads.');
+      worker.postMessage({ type: 'load' });
+    } else runAudioTranscription(pendingAudio);
+  } catch (err) {
+    aiBusy = false; $('detectBtn').disabled = false; $('detectBtn').textContent = '✦ Find moments';
+    setAiStatus('Could not read the audio file.');
+    notice.textContent = `Audio error: ${err.message || err}. Try MP3 or WAV.`;
   }
-  setAiStatus('Extracting audio by playing the video once. Keep this tab open…');
-  const recorder = new MediaRecorder(audioStream, { mimeType: mime });
-  const parts = [];
-  recorder.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
-  const finished = new Promise((resolve, reject) => {
-    recorder.onerror = () => reject(new Error('Audio capture failed.'));
-    recorder.onstop = resolve;
-  });
-  recorder.start(1000);
-  await video.play();
-  await new Promise(resolve => {
-    video.addEventListener('ended', resolve, { once: true });
-    video.addEventListener('error', resolve, { once: true });
-  });
-  video.pause();
-  if (recorder.state !== 'inactive') recorder.stop();
-  await finished;
-  source.getTracks().forEach(t => t.stop());
-  video.muted = wasMuted;
-  video.currentTime = Math.min(originalTime, duration);
-  const blob = new Blob(parts, { type: mime });
+};
+
+async function decodeAudioFile(file) {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtx) throw new Error('This browser does not support Web Audio.');
+  if (!AudioCtx) throw new Error('Web Audio is not supported in this browser.');
   const ctx = new AudioCtx();
   try {
-    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const channels = decoded.numberOfChannels;
+    const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
     const mono = new Float32Array(decoded.length);
-    for (let ch = 0; ch < channels; ch++) {
-      const data = decoded.getChannelData(ch);
-      for (let i = 0; i < decoded.length; i++) mono[i] += data[i] / channels;
+    for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+      const channel = decoded.getChannelData(ch);
+      for (let i = 0; i < decoded.length; i++) mono[i] += channel[i] / decoded.numberOfChannels;
     }
     const ratio = decoded.sampleRate / 16000;
-    const outLength = Math.floor(mono.length / ratio);
-    const resampled = new Float32Array(outLength);
-    for (let i = 0; i < outLength; i++) {
+    const out = new Float32Array(Math.floor(mono.length / ratio));
+    for (let i = 0; i < out.length; i++) {
       const pos = i * ratio, left = Math.floor(pos), frac = pos - left;
       const right = Math.min(left + 1, mono.length - 1);
-      resampled[i] = mono[left] * (1 - frac) + mono[right] * frac;
+      out[i] = mono[left] * (1 - frac) + mono[right] * frac;
     }
-    return { audio: resampled, seconds: decoded.duration };
-  } finally {
-    await ctx.close();
-  }
+    return { audio: out, duration: decoded.duration };
+  } finally { await ctx.close(); }
+}
+
+function runAudioTranscription(data) {
+  if (!data?.audio) { aiBusy = false; return; }
+  setAiStatus('Whisper is transcribing in a background worker. The page should remain responsive; this may take a while on a slow laptop.');
+  const audio = data.audio;
+  worker.postMessage({ type: 'transcribe', audioBuffer: audio.buffer }, [audio.buffer]);
 }
 
 function makeSuggestions(chunks, totalDuration) {
@@ -161,22 +190,19 @@ function makeSuggestions(chunks, totalDuration) {
     ? [...$('categories').querySelectorAll('input:checked')].map(x => x.value)
     : Object.keys(KEYWORDS);
   const pool = [];
-  for (const chunk of chunks || []) {
+  for (const chunk of chunks) {
     const text = (chunk.text || '').trim();
     if (!text) continue;
     const low = text.toLowerCase();
     const matched = selected.filter(cat => KEYWORDS[cat].some(k => low.includes(k)));
-    const emphatic = (text.match(/[!?]/g) || []).length;
-    let score = matched.length * 2 + Math.min(emphatic, 3) * 0.3;
+    const emphasis = (text.match(/[!?]/g) || []).length;
+    let score = matched.length * 2 + Math.min(emphasis, 3) * 0.3;
     if (text.split(/\s+/).length >= 6) score += 0.2;
     if (!matched.length) score = 0.25;
-    const rawStart = Array.isArray(chunk.timestamp) ? chunk.timestamp[0] : chunk.timestamp?.[0];
-    const rawEnd = Array.isArray(chunk.timestamp) ? chunk.timestamp[1] : chunk.timestamp?.[1];
-    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
-    const start = Math.max(0, rawStart - 5);
-    const end = Math.min(totalDuration, Math.max(rawEnd + 7, start + 8));
+    const start = Math.max(0, Number(chunk.start) - 5);
+    const end = Math.min(totalDuration, Math.max(Number(chunk.end) + 7, start + 8));
     if (end - start < 5) continue;
-    pool.push({ start, end, title: text.slice(0, 62) || 'AI moment', category: matched[0] || 'Dialogue review', score, transcript: text });
+    pool.push({ start, end, title: text.slice(0, 62) || 'AI moment', category: matched[0] || 'Dialogue review', score });
   }
   pool.sort((a, b) => b.score - a.score);
   const result = [];
@@ -186,62 +212,6 @@ function makeSuggestions(chunks, totalDuration) {
   }
   return result;
 }
-
-$('detectBtn').onclick = async () => {
-  if (aiBusy) return;
-  const file = input.files?.[0];
-  if (!file) { notice.textContent = 'Choose a video first.'; return; }
-  if (duration > 300) {
-    notice.textContent = 'For this first on-device AI test, please use a video of 5 minutes or less.';
-    return;
-  }
-  if (file.size > 120 * 1024 * 1024) {
-    notice.textContent = 'This first browser AI test is limited to files under 120 MB to reduce memory problems on phones.';
-    return;
-  }
-  aiBusy = true;
-  $('detectBtn').disabled = true;
-  $('detectBtn').textContent = '◌ Analysing…';
-  try {
-    const engine = await getTranscriber();
-    const { audio, seconds } = await extractMonoAudio(file);
-    setAiStatus('Whisper is transcribing the audio. On a phone this can take several minutes…');
-    const result = await engine(audio, {
-      chunk_length_s: 20,
-      stride_length_s: 4,
-      return_timestamps: true
-    });
-    const chunks = result.chunks || [];
-    const transcript = result.text || '';
-    $('transcriptText').textContent = transcript || 'No speech was recognised.';
-    $('transcriptPanel').classList.remove('hidden');
-    const suggestions = makeSuggestions(chunks, seconds || duration);
-    suggestions.forEach((s, i) => {
-      clips.push({
-        id: Date.now() + i + Math.random(),
-        title: s.title,
-        start: s.start,
-        end: s.end,
-        category: `AI suggestion · ${s.category}`
-      });
-    });
-    render();
-    transcriptReady = true;
-    setAiStatus(`Analysis complete. ${chunks.length} speech segments processed; ${suggestions.length} candidate clips suggested.`);
-    notice.textContent = suggestions.length
-      ? 'AI suggestions added to your clip list. Review each one before downloading.'
-      : 'Transcription finished, but no strong keyword-based highlights were found. Review the transcript and make a manual cut.';
-  } catch (err) {
-    console.error(err);
-    const message = err?.message || String(err);
-    setAiStatus('AI analysis could not finish.');
-    notice.textContent = `AI error: ${message}. Try a shorter MP4 with clear audio, and keep Chrome open.`;
-  } finally {
-    aiBusy = false;
-    $('detectBtn').disabled = false;
-    $('detectBtn').textContent = '✦ Find moments';
-  }
-};
 
 function render() {
   $('clipCount').textContent = clips.length;
@@ -255,10 +225,8 @@ function render() {
     const small = document.createElement('small'); small.textContent = `${time(c.start)} – ${time(c.end)}  ·  ${c.category}`;
     info.append(strong, small);
     const actions = document.createElement('div'); actions.className = 'clip-actions';
-    const previewBtn = document.createElement('button'); previewBtn.textContent = 'Preview';
-    previewBtn.onclick = () => { video.currentTime = c.start; video.play(); };
-    const del = document.createElement('button'); del.textContent = 'Remove';
-    del.onclick = () => { clips = clips.filter(x => x.id !== c.id); render(); };
+    const previewBtn = document.createElement('button'); previewBtn.textContent = 'Preview'; previewBtn.onclick = () => { video.currentTime = c.start; video.play(); };
+    const del = document.createElement('button'); del.textContent = 'Remove'; del.onclick = () => { clips = clips.filter(x => x.id !== c.id); render(); };
     const dl = document.createElement('button'); dl.className = 'download'; dl.textContent = 'Download'; dl.onclick = () => exportClip(c);
     actions.append(previewBtn, del, dl); el.append(info, actions); list.append(el);
   });
@@ -305,10 +273,7 @@ function recordClip(c, orientation) {
     };
     draw();
     const stop = () => { cancelAnimationFrame(raf); if (rec.state !== 'inactive') rec.stop(); };
-    const poll = () => {
-      if (video.currentTime >= c.end || video.ended) { video.pause(); stop(); }
-      else if (rec.state !== 'inactive') setTimeout(poll, 100);
-    };
+    const poll = () => { if (video.currentTime >= c.end || video.ended) { video.pause(); stop(); } else if (rec.state !== 'inactive') setTimeout(poll, 100); };
     poll();
     video.addEventListener('pause', () => { if (rec.state !== 'inactive' && video.currentTime < c.end) stop(); }, { once: true });
   });

@@ -5,6 +5,12 @@
 <meta name="theme-color" content="#090b12"><meta name="description" content="VICE CITY FILES — your personal video clipping studio">
 <link rel="manifest" href="manifest.webmanifest"><link rel="stylesheet" href="style.css">
 <title>VICE CITY FILES</title>
+<style>
+.ai-status-card,.transcript-panel{margin-top:14px;padding:13px;background:#171d2a;border:1px solid #30394a;border-radius:9px}
+.ai-status-card p,.transcript-panel p{color:#c5cad5;font-size:12px;line-height:1.65;overflow-wrap:anywhere}
+.transcript-panel{max-height:240px;overflow:auto}.actions{flex-wrap:wrap}.actions button:disabled{opacity:.55;cursor:wait}
+.audio-file-label{display:block;margin-top:8px;color:#9299a9;font:10px 'DM Mono',monospace;overflow-wrap:anywhere}
+</style>
 </head>
 <body>
 <div class="app-shell">
@@ -24,7 +30,7 @@
         <input id="videoInput" type="file" accept="video/*" hidden>
         <div class="or">OR</div>
         <div class="url-row"><input id="videoUrl" placeholder="Paste an authorized video URL" type="url"><button id="urlBtn" class="secondary-btn">Add URL</button></div>
-        <small class="hint">URL import is a placeholder in this MVP. Upload a video file to begin.</small>
+        <small class="hint">URL import is not included yet. Upload a video file to begin.</small>
       </div>
       <div id="editor" class="editor hidden">
         <div class="section-head compact"><div><span class="kicker">SOURCE FOOTAGE</span><h2 id="fileName">Your video</h2></div><button id="removeVideo" class="text-btn">Remove ×</button></div>
@@ -37,16 +43,16 @@
         <div class="section-head compact"><div><span class="kicker">CLIP CONTROLS</span><h2>Make a cut</h2></div><span class="muted" id="durationLabel">00:00</span></div>
         <div class="trim-grid"><div class="setting"><label>START (SECONDS)</label><input id="startTime" type="number" min="0" step=".1" value="0"></div><div class="setting"><label>END (SECONDS)</label><input id="endTime" type="number" min="0" step=".1" value="15"></div></div>
         <div class="setting title-setting"><label>CLIP TITLE</label><input id="clipTitle" value="Untitled moment" maxlength="70"></div>
-        <div class="actions"><button id="addClip" class="primary-btn">＋ Add to clip list</button><button id="detectBtn" class="secondary-btn">✦ Find moments</button></div>
-        <div class="ai-status-card">
-          <span class="kicker">ON-DEVICE AI ENGINE</span>
-          <p id="aiStatus">Whisper tiny runs in your browser. The first model download is large; use a short video and keep this tab open.</p>
+        <div class="actions">
+          <button id="addClip" class="primary-btn">＋ Add to clip list</button>
+          <button id="chooseAudioBtn" class="secondary-btn">Choose audio for AI</button>
+          <button id="detectBtn" class="secondary-btn">✦ Find moments</button>
         </div>
-        <div id="transcriptPanel" class="transcript-panel hidden">
-          <span class="kicker">AI TRANSCRIPT</span>
-          <p id="transcriptText"></p>
-        </div>
-        <p id="notice" class="notice">AI suggestions are experimental and are based on speech transcription plus keyword clues. Review every suggested clip.</p>
+        <input id="audioInput" type="file" accept="audio/*" hidden>
+        <small id="audioFileName" class="audio-file-label">No AI audio selected yet. Choose an MP3, WAV or M4A extracted from this video.</small>
+        <div class="ai-status-card"><span class="kicker">ON-DEVICE AI ENGINE · BACKGROUND WORKER</span><p id="aiStatus">Whisper Tiny runs in a background worker. Select an audio-only file from the same video for analysis.</p></div>
+        <div id="transcriptPanel" class="transcript-panel hidden"><span class="kicker">AI TRANSCRIPT</span><p id="transcriptText"></p></div>
+        <p id="notice" class="notice">AI suggestions are experimental and use speech transcription plus keyword clues. Review every suggested clip.</p>
         <div class="section-head compact"><div><span class="kicker">YOUR EDITS</span><h2>Clip list <span id="clipCount" class="count">0</span></h2></div><button id="clearClips" class="text-btn">Clear all</button></div>
         <div id="clipList" class="clip-list"><div class="empty">Your selected moments will appear here.</div></div>
       </div>

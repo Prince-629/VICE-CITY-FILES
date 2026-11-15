@@ -1,1 +1,12 @@
-const CACHE='vice-city-files-v1';const ASSETS=['./','./index.html','./style.css','./app.js','./manifest.webmanifest'];self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS))));self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request).catch(()=>caches.match('./index.html'))))});
+const CACHE = 'vice-city-files-v3';
+const ASSETS = ['./', './index.html', './style.css', './app.js', './ai-worker.js', './manifest.webmanifest'];
+self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
+self.addEventListener('activate', event => event.waitUntil((async () => {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter(key => key.startsWith('vice-city-files-') && key !== CACHE).map(key => caches.delete(key)));
+  await self.clients.claim();
+})()));
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
+  event.respondWith(caches.match(event.request).then(response => response || fetch(event.request).catch(() => caches.match('./index.html'))));
+});
