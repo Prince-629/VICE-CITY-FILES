@@ -3,6 +3,11 @@ const input = $('videoInput'), video = $('preview'), editor = $('editor'), notic
 let objectUrl = null, clips = [], duration = 0, installPrompt = null;
 let worker = null, workerReady = false, workerLoading = false, pendingAudio = null;
 let aiBusy = false;
+let sourceVideoFile = null;
+let ffmpegInstance = null;
+let ffmpegLoadPromise = null;
+let exportBusy = false;
+const MAX_EXPORT_MB = 180;
 
 function time(s) {
   s = Math.max(0, Number(s) || 0);
@@ -13,6 +18,7 @@ function setAiStatus(message) { $('aiStatus').textContent = message; }
 input.addEventListener('change', () => {
   const f = input.files?.[0];
   if (!f) return;
+  sourceVideoFile = f;
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(f);
   video.src = objectUrl;
@@ -36,7 +42,7 @@ video.addEventListener('loadedmetadata', () => {
 $('removeVideo').onclick = () => {
   video.pause(); video.removeAttribute('src'); video.load();
   if (objectUrl) URL.revokeObjectURL(objectUrl);
-  objectUrl = null; editor.classList.add('hidden'); input.value = ''; clips = []; render();
+  objectUrl = null; sourceVideoFile = null; editor.classList.add('hidden'); input.value = ''; clips = []; render();
 };
 $('urlBtn').onclick = () => alert('Direct URL importing is not included yet. Upload a video you own or are authorized to use.');
 $('mode').onchange = () => { $('categories').style.display = $('mode').value === 'guided' ? 'flex' : 'none'; };
@@ -45,7 +51,7 @@ $('addClip').onclick = () => {
   const end = Math.min(duration, Number($('endTime').value) || 0);
   if (end <= start) { notice.textContent = 'End time must be later than start time.'; return; }
   clips.push({ id: Date.now() + Math.random(), title: $('clipTitle').value || 'Untitled moment', start, end, category: 'Manual cut' });
-  render(); notice.textContent = 'Clip added. Choose Download to render it in your browser.';
+  render(); notice.textContent = 'Clip added. Choose Download MP4 to create an H.264/AAC MP4 file. The first export downloads the encoder.';
 };
 $('clearClips').onclick = () => { clips = []; render(); };
 
@@ -227,57 +233,132 @@ function render() {
     const actions = document.createElement('div'); actions.className = 'clip-actions';
     const previewBtn = document.createElement('button'); previewBtn.textContent = 'Preview'; previewBtn.onclick = () => { video.currentTime = c.start; video.play(); };
     const del = document.createElement('button'); del.textContent = 'Remove'; del.onclick = () => { clips = clips.filter(x => x.id !== c.id); render(); };
-    const dl = document.createElement('button'); dl.className = 'download'; dl.textContent = 'Download'; dl.onclick = () => exportClip(c);
+    const dl = document.createElement('button'); dl.className = 'download'; dl.textContent = 'Download MP4'; dl.onclick = () => exportClip(c);
     actions.append(previewBtn, del, dl); el.append(info, actions); list.append(el);
   });
 }
-async function exportClip(c) {
-  if (!video.src) return;
-  const vertical = $('format').value === 'vertical' || $('format').value === 'both';
-  const landscape = $('format').value === 'landscape' || $('format').value === 'both';
-  if (vertical) await recordClip(c, 'vertical');
-  if (landscape) await recordClip(c, 'landscape');
+function setExportStatus(message) {
+  const el = $('exportStatus');
+  if (el) el.textContent = message;
+  setAiStatus(message);
 }
-function recordClip(c, orientation) {
-  return new Promise(async resolve => {
-    const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d');
-    canvas.width = orientation === 'vertical' ? 720 : 1280;
-    canvas.height = orientation === 'vertical' ? 1280 : 720;
-    const stream = canvas.captureStream(30);
-    try { video.captureStream().getAudioTracks().forEach(t => stream.addTrack(t)); } catch (e) {}
-    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(x => MediaRecorder.isTypeSupported(x));
-    if (!mime) { notice.textContent = 'This browser cannot export WebM video. Try current Chrome.'; resolve(); return; }
-    const rec = new MediaRecorder(stream, { mimeType: mime }), chunks = [];
-    rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-    rec.onstop = () => {
-      const blob = new Blob(chunks, { type: mime }), url = URL.createObjectURL(blob), a = document.createElement('a');
-      a.href = url; a.download = `vice-city-${orientation}-${Math.floor(c.start)}-${Math.floor(c.end)}.webm`; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      video.pause(); stream.getTracks().forEach(t => t.stop()); resolve();
-    };
-    video.pause(); video.currentTime = c.start;
-    await new Promise(r => video.addEventListener('seeked', r, { once: true }));
-    rec.start(); video.play();
-    let raf;
-    const draw = () => {
-      const vw = video.videoWidth, vh = video.videoHeight;
-      if (vw && vh) {
-        const targetRatio = canvas.width / canvas.height, srcRatio = vw / vh;
-        let sx = 0, sy = 0, sw = vw, sh = vh;
-        if (srcRatio > targetRatio) { sw = vh * targetRatio; sx = (vw - sw) / 2; }
-        else { sh = vw / targetRatio; sy = (vh - sh) / 2; }
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+async function fetchAsBlobURL(url, mimeType) {
+  const response = await fetch(url, { cache: 'force-cache' });
+  if (!response.ok) throw new Error(`Could not download encoder asset (${response.status}).`);
+  const data = await response.arrayBuffer();
+  return URL.createObjectURL(new Blob([data], { type: mimeType }));
+}
+
+async function getMp4Encoder() {
+  if (ffmpegInstance) return ffmpegInstance;
+  if (ffmpegLoadPromise) return ffmpegLoadPromise;
+  ffmpegLoadPromise = (async () => {
+    if (!window.FFmpegWASM || !window.FFmpegWASM.FFmpeg) {
+      throw new Error('The MP4 encoder library did not load. Check your internet connection, refresh the page, and retry.');
+    }
+    setExportStatus('Loading the MP4 encoder. This first-time download is about 30–40 MB.');
+    const ffmpeg = new window.FFmpegWASM.FFmpeg();
+    ffmpeg.on('progress', ({ progress }) => {
+      if (Number.isFinite(progress)) {
+        const percent = Math.max(0, Math.min(100, Math.round(progress * 100)));
+        setExportStatus(`Encoding MP4 in the background: ${percent}%`);
       }
-      if (!video.paused && video.currentTime < c.end) raf = requestAnimationFrame(draw);
-    };
-    draw();
-    const stop = () => { cancelAnimationFrame(raf); if (rec.state !== 'inactive') rec.stop(); };
-    const poll = () => { if (video.currentTime >= c.end || video.ended) { video.pause(); stop(); } else if (rec.state !== 'inactive') setTimeout(poll, 100); };
-    poll();
-    video.addEventListener('pause', () => { if (rec.state !== 'inactive' && video.currentTime < c.end) stop(); }, { once: true });
-  });
+    });
+    ffmpeg.on('log', ({ message }) => {
+      if (message && /error|failed|invalid/i.test(message)) console.warn('[VICE CITY FFmpeg]', message);
+    });
+    const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+    const coreURL = await fetchAsBlobURL(`${coreBase}/ffmpeg-core.js`, 'text/javascript');
+    const wasmURL = await fetchAsBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm');
+    await ffmpeg.load({ coreURL, wasmURL });
+    ffmpegInstance = ffmpeg;
+    return ffmpeg;
+  })().catch(error => { ffmpegLoadPromise = null; throw error; });
+  return ffmpegLoadPromise;
 }
+
+function safeFilePart(value) {
+  return String(value || 'clip').replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().replace(/\s+/g, '-').slice(0, 55) || 'clip';
+}
+
+function ffmpegFilter(orientation) {
+  const width = orientation === 'vertical' ? 720 : 1280;
+  const height = orientation === 'vertical' ? 1280 : 720;
+  // Preserve the whole source frame in front; fill the canvas with a blurred copy.
+  return `[0:v:0]split=2[bgsrc][fgsrc];` +
+    `[bgsrc]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
+    `crop=${width}:${height},boxblur=18:2[bg];` +
+    `[fgsrc]scale=${width}:${height}:force_original_aspect_ratio=decrease[fg];` +
+    `[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[v]`;
+}
+
+async function renderMp4(c, orientation) {
+  if (!sourceVideoFile) throw new Error('Upload your source video again before exporting.');
+  const start = Math.max(0, Number(c.start));
+  const end = Math.min(duration, Number(c.end));
+  const clipDuration = end - start;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || clipDuration <= 0.15) {
+    throw new Error('The clip end time must be later than the start time.');
+  }
+  if (sourceVideoFile.size > MAX_EXPORT_MB * 1024 * 1024) {
+    throw new Error(`This browser MP4 exporter is limited to ${MAX_EXPORT_MB} MB per source video. Use a shorter or smaller source file.`);
+  }
+  const ffmpeg = await getMp4Encoder();
+  const ext = (sourceVideoFile.name.match(/\.([a-z0-9]{2,5})$/i)?.[1] || 'mp4').toLowerCase();
+  const allowedExt = ['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi'].includes(ext) ? ext : 'mp4';
+  const inputName = `vcf_source.${allowedExt}`;
+  const outputName = `vcf_${orientation}_${Math.round(start * 10)}_${Math.round(end * 10)}.mp4`;
+  setExportStatus('Copying source video into the MP4 encoder…');
+  const inputBytes = new Uint8Array(await sourceVideoFile.arrayBuffer());
+  await ffmpeg.writeFile(inputName, inputBytes);
+  const args = [
+    '-y', '-ss', start.toFixed(3), '-i', inputName, '-t', clipDuration.toFixed(3),
+    '-filter_complex', ffmpegFilter(orientation),
+    '-map', '[v]', '-map', '0:a:0?',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24',
+    '-pix_fmt', 'yuv420p', '-r', '30', '-c:a', 'aac', '-b:a', '128k',
+    '-movflags', '+faststart', '-t', clipDuration.toFixed(3), outputName
+  ];
+  setExportStatus(`Rendering ${orientation === 'vertical' ? '9:16 vertical' : '16:9 landscape'} MP4 (${clipDuration.toFixed(1)} seconds)…`);
+  const exitCode = await ffmpeg.exec(args);
+  if (exitCode !== 0) throw new Error(`MP4 encoder exited with code ${exitCode}. Try an MP4 or MOV source file.`);
+  const output = await ffmpeg.readFile(outputName);
+  const bytes = output instanceof Uint8Array ? output : new Uint8Array(output);
+  const blob = new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)], { type: 'video/mp4' });
+  if (blob.size < 1024) throw new Error('The MP4 output was unexpectedly small. Please retry with a supported source video.');
+  const filename = `VICE-CITY-FILES-${safeFilePart(c.title)}-${orientation}.mp4`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a'); link.href = url; link.download = filename;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  try { await ffmpeg.deleteFile(inputName); } catch (_) {}
+  try { await ffmpeg.deleteFile(outputName); } catch (_) {}
+  return filename;
+}
+
+async function exportClip(c) {
+  if (exportBusy) return;
+  if (!sourceVideoFile || !video.src) { notice.textContent = 'Upload your source video again before exporting.'; return; }
+  exportBusy = true;
+  const buttons = [...document.querySelectorAll('.clip-actions .download')];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const formats = $('format').value === 'vertical' ? ['vertical'] : $('format').value === 'landscape' ? ['landscape'] : ['vertical', 'landscape'];
+    const completed = [];
+    for (const orientation of formats) completed.push(await renderMp4(c, orientation));
+    setExportStatus(`MP4 export complete: ${completed.join(' and ')}`);
+    notice.textContent = 'Your MP4 file uses H.264 video and AAC audio. It should play in common desktop and mobile video players.';
+  } catch (error) {
+    console.error(error);
+    setExportStatus('MP4 export could not finish.');
+    notice.textContent = `MP4 export error: ${error.message || error}. Your original video has not been changed.`;
+  } finally {
+    exportBusy = false;
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
+
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; $('installBtn').classList.remove('hidden'); });
 $('installBtn').onclick = async () => { if (installPrompt) { installPrompt.prompt(); installPrompt = null; $('installBtn').classList.add('hidden'); } };
 if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));

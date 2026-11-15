@@ -37,7 +37,7 @@
         <video id="preview" controls playsinline></video>
         <div class="settings-grid">
           <div class="setting"><label>DETECTION MODE</label><select id="mode"><option value="auto">Fully automatic</option><option value="guided">Choose categories</option></select></div>
-          <div class="setting"><label>EXPORT FORMAT</label><select id="format"><option value="both">Vertical + landscape</option><option value="vertical">Vertical 9:16</option><option value="landscape">Landscape 16:9</option></select></div>
+          <div class="setting"><label>EXPORT FORMAT</label><select id="format"><option value="both">MP4 · Vertical + landscape</option><option value="vertical">MP4 · Vertical 9:16</option><option value="landscape">MP4 · Landscape 16:9</option></select></div>
         </div>
         <div id="categories" class="categories"><label class="check"><input type="checkbox" value="Funny moments" checked> Funny moments</label><label class="check"><input type="checkbox" value="Crazy gameplay" checked> Crazy gameplay</label><label class="check"><input type="checkbox" value="Unexpected moments" checked> Unexpected moments</label><label class="check"><input type="checkbox" value="Reactions" checked> Reactions</label><label class="check"><input type="checkbox" value="Memorable dialogue" checked> Memorable dialogue</label></div>
         <div class="section-head compact"><div><span class="kicker">CLIP CONTROLS</span><h2>Make a cut</h2></div><span class="muted" id="durationLabel">00:00</span></div>
@@ -52,6 +52,7 @@
         <small id="audioFileName" class="audio-file-label">No AI audio selected yet. Choose an MP3, WAV or M4A extracted from this video.</small>
         <div class="ai-status-card"><span class="kicker">ON-DEVICE AI ENGINE · BACKGROUND WORKER</span><p id="aiStatus">Whisper Tiny runs in a background worker. Select an audio-only file from the same video for analysis.</p></div>
         <div id="transcriptPanel" class="transcript-panel hidden"><span class="kicker">AI TRANSCRIPT</span><p id="transcriptText"></p></div>
+        <div class="ai-status-card"><span class="kicker">MP4 EXPORT ENGINE</span><p id="exportStatus">Exports are H.264 video + AAC audio in MP4. Vertical exports preserve the full frame over a blurred background. The first export downloads the FFmpeg encoder; slower laptops may take several minutes.</p></div>
         <p id="notice" class="notice">AI suggestions are experimental and use speech transcription plus keyword clues. Review every suggested clip.</p>
         <div class="section-head compact"><div><span class="kicker">YOUR EDITS</span><h2>Clip list <span id="clipCount" class="count">0</span></h2></div><button id="clearClips" class="text-btn">Clear all</button></div>
         <div id="clipList" class="clip-list"><div class="empty">Your selected moments will appear here.</div></div>
@@ -60,5 +61,6 @@
     <footer><span>VICE CITY FILES © 2026</span><span>BUILT FOR THE MOMENTS THAT MATTER.</span></footer>
   </main>
 </div>
-<script src="app.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js"></script>
+<script defer src="app.js"></script>
 </body></html>
