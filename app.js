@@ -268,10 +268,16 @@ async function getMp4Encoder() {
     ffmpeg.on('log', ({ message }) => {
       if (message && /error|failed|invalid/i.test(message)) console.warn('[VICE CITY FFmpeg]', message);
     });
+    // FFmpeg's UMD bundle normally starts its helper worker from the jsDelivr
+    // origin. Browsers block cross-origin Worker scripts from GitHub Pages.
+    // Fetch the helper worker with CORS and turn it into a blob URL so the
+    // Worker is created with this page's origin.
+    const ffmpegPackageBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd';
     const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+    const classWorkerURL = await fetchAsBlobURL(`${ffmpegPackageBase}/814.ffmpeg.js`, 'text/javascript');
     const coreURL = await fetchAsBlobURL(`${coreBase}/ffmpeg-core.js`, 'text/javascript');
     const wasmURL = await fetchAsBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm');
-    await ffmpeg.load({ coreURL, wasmURL });
+    await ffmpeg.load({ coreURL, wasmURL, classWorkerURL });
     ffmpegInstance = ffmpeg;
     return ffmpeg;
   })().catch(error => { ffmpegLoadPromise = null; throw error; });
