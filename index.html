@@ -38,7 +38,15 @@
         <div class="trim-grid"><div class="setting"><label>START (SECONDS)</label><input id="startTime" type="number" min="0" step=".1" value="0"></div><div class="setting"><label>END (SECONDS)</label><input id="endTime" type="number" min="0" step=".1" value="15"></div></div>
         <div class="setting title-setting"><label>CLIP TITLE</label><input id="clipTitle" value="Untitled moment" maxlength="70"></div>
         <div class="actions"><button id="addClip" class="primary-btn">＋ Add to clip list</button><button id="detectBtn" class="secondary-btn">✦ Find moments</button></div>
-        <p id="notice" class="notice">AI moment detection is not connected yet. Add cuts manually or use the clearly labelled sample suggestions.</p>
+        <div class="ai-status-card">
+          <span class="kicker">ON-DEVICE AI ENGINE</span>
+          <p id="aiStatus">Whisper tiny runs in your browser. The first model download is large; use a short video and keep this tab open.</p>
+        </div>
+        <div id="transcriptPanel" class="transcript-panel hidden">
+          <span class="kicker">AI TRANSCRIPT</span>
+          <p id="transcriptText"></p>
+        </div>
+        <p id="notice" class="notice">AI suggestions are experimental and are based on speech transcription plus keyword clues. Review every suggested clip.</p>
         <div class="section-head compact"><div><span class="kicker">YOUR EDITS</span><h2>Clip list <span id="clipCount" class="count">0</span></h2></div><button id="clearClips" class="text-btn">Clear all</button></div>
         <div id="clipList" class="clip-list"><div class="empty">Your selected moments will appear here.</div></div>
       </div>
