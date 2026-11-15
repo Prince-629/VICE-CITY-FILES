@@ -29,8 +29,9 @@ input.addEventListener('change', () => {
   $('endTime').value = 15;
   clips = [];
   render();
-  setAiStatus('AI runs in a background worker. For analysis, select a separate audio-only file (MP3, WAV or M4A) to avoid decoding heavy 4K video on this laptop.');
-  notice.textContent = 'Video loaded locally. Manual clipping still uses the video. AI transcription uses a separate audio file to keep the page responsive.';
+  setAiStatus('Video loaded. Click Find moments to transcribe its audio in the background — no separate audio file needed. For very large or 4K videos, you can still use Choose audio for AI to provide a lighter MP3/WAV instead.');
+  notice.textContent = 'Video loaded locally. Press Find moments to let AI detect highlights from the video audio. Manual clipping and MP4 export work as before.';
+  loadWorker();
 });
 video.addEventListener('loadedmetadata', () => {
   duration = video.duration || 0;
@@ -75,7 +76,7 @@ function ensureWorker() {
     }
     if (d.type === 'ready') {
       workerReady = true; workerLoading = false;
-      setAiStatus('Whisper Tiny is ready. Select an audio file and press Find moments.');
+      setAiStatus('Whisper Tiny is ready. Press Find moments to transcribe your video audio.');
       if (pendingAudio) runAudioTranscription(pendingAudio);
     }
     if (d.type === 'transcribe-progress') setAiStatus(d.message || 'Transcribing…');
@@ -102,7 +103,7 @@ function ensureWorker() {
       $('detectBtn').disabled = false;
       $('detectBtn').textContent = '✦ Find moments';
       setAiStatus('AI worker reported an error.');
-      notice.textContent = `AI error: ${d.message}. Try a shorter MP3/WAV audio file or reload the page.`;
+      notice.textContent = `AI error: ${d.message}. Try a shorter video, or use Choose audio for AI to provide a separate MP3/WAV. You can also reload the page.`;
     }
   };
   worker.onerror = e => {
@@ -133,22 +134,19 @@ $('audioInput').addEventListener('change', () => {
   $('audioFileName').textContent = `Selected AI audio: ${file.name}`;
   pendingAudio = { file, duration: 0 };
   setAiStatus('Audio selected. Click Find moments to transcribe it in the background.');
-  notice.textContent = 'For best results, choose audio extracted from the same video loaded above. The separate audio file avoids decoding a 4K video during AI analysis.';
+  notice.textContent = 'This separate audio file will be used instead of the video audio. For best results, extract it from the same video loaded above.';
 });
 
 $('detectBtn').onclick = async () => {
   if (aiBusy) return;
   if (!input.files?.[0]) { notice.textContent = 'Choose a video first so suggested timestamps can be clipped from it.'; return; }
-  const file = $('audioInput').files?.[0];
-  if (!file) {
-    notice.textContent = 'Please select an audio-only file (MP3, WAV or M4A) using Choose audio for AI. A 4K video can overload a slow laptop during audio extraction.';
-    $('audioInput').click();
-    return;
-  }
+  const audioFile = $('audioInput').files?.[0];
+  const sourceFile = audioFile || sourceVideoFile;
+  const sourceLabel = audioFile ? 'the selected audio file' : 'the video audio';
   aiBusy = true; $('detectBtn').disabled = true; $('detectBtn').textContent = '◌ Analysing…';
   try {
-    setAiStatus('Decoding the selected audio file…');
-    const decoded = await decodeAudioFile(file);
+    setAiStatus(`Extracting audio from ${sourceLabel}…`);
+    const decoded = await decodeAudioFile(sourceFile);
     pendingAudio = { audio: decoded.audio, duration: decoded.duration };
     if (!workerReady) {
       ensureWorker(); workerLoading = true;
@@ -157,17 +155,23 @@ $('detectBtn').onclick = async () => {
     } else runAudioTranscription(pendingAudio);
   } catch (err) {
     aiBusy = false; $('detectBtn').disabled = false; $('detectBtn').textContent = '✦ Find moments';
-    setAiStatus('Could not read the audio file.');
-    notice.textContent = `Audio error: ${err.message || err}. Try MP3 or WAV.`;
+    setAiStatus('Could not extract audio.');
+    const hint = audioFile
+      ? 'Try an MP3 or WAV file instead.'
+      : 'Your browser may not decode this video codec. Try Choose audio for AI to provide a separate MP3 or WAV extracted from the video.';
+    notice.textContent = `Audio error: ${err.message || err}. ${hint}`;
   }
 };
 
 async function decodeAudioFile(file) {
+  if (!file) throw new Error('No file provided for audio extraction.');
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) throw new Error('Web Audio is not supported in this browser.');
+  const arrayBuffer = await file.arrayBuffer();
+  if (arrayBuffer.byteLength === 0) throw new Error('The file is empty or could not be read.');
   const ctx = new AudioCtx();
   try {
-    const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
     const mono = new Float32Array(decoded.length);
     for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
       const channel = decoded.getChannelData(ch);
@@ -181,7 +185,13 @@ async function decodeAudioFile(file) {
       out[i] = mono[left] * (1 - frac) + mono[right] * frac;
     }
     return { audio: out, duration: decoded.duration };
-  } finally { await ctx.close(); }
+  } catch (err) {
+    throw new Error(
+      file.type && file.type.startsWith('video/')
+        ? `This browser could not decode the audio track of this ${file.type.includes('mp4') ? 'MP4' : 'video'} file. ${err.message || ''}`
+        : `Could not decode the audio file. ${err.message || ''}`
+    );
+  } finally { try { await ctx.close(); } catch (_) {} }
 }
 
 function runAudioTranscription(data) {

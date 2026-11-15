@@ -11,6 +11,9 @@
 .transcript-panel{max-height:240px;overflow:auto}.actions{flex-wrap:wrap}.actions button:disabled{opacity:.55;cursor:wait}
 .audio-file-label{display:block;margin-top:8px;color:#9299a9;font:10px 'DM Mono',monospace;overflow-wrap:anywhere}
 </style>
+  <meta property="og:image" content="https://bolt.new/static/og_default.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://bolt.new/static/og_default.png">
 </head>
 <body>
 <div class="app-shell">
@@ -45,12 +48,12 @@
         <div class="setting title-setting"><label>CLIP TITLE</label><input id="clipTitle" value="Untitled moment" maxlength="70"></div>
         <div class="actions">
           <button id="addClip" class="primary-btn">＋ Add to clip list</button>
-          <button id="chooseAudioBtn" class="secondary-btn">Choose audio for AI</button>
           <button id="detectBtn" class="secondary-btn">✦ Find moments</button>
+          <button id="chooseAudioBtn" class="secondary-btn">Use separate audio</button>
         </div>
         <input id="audioInput" type="file" accept="audio/*" hidden>
-        <small id="audioFileName" class="audio-file-label">No AI audio selected yet. Choose an MP3, WAV or M4A extracted from this video.</small>
-        <div class="ai-status-card"><span class="kicker">ON-DEVICE AI ENGINE · BACKGROUND WORKER</span><p id="aiStatus">Whisper Tiny runs in a background worker. Select an audio-only file from the same video for analysis.</p></div>
+        <small id="audioFileName" class="audio-file-label">No separate audio selected. By default, Find moments extracts audio directly from your video. Optionally provide a lighter MP3/WAV for large videos.</small>
+        <div class="ai-status-card"><span class="kicker">ON-DEVICE AI ENGINE · BACKGROUND WORKER</span><p id="aiStatus">Upload a video, then press Find moments. AI transcribes its audio in a background worker to detect highlight candidates.</p></div>
         <div id="transcriptPanel" class="transcript-panel hidden"><span class="kicker">AI TRANSCRIPT</span><p id="transcriptText"></p></div>
         <div class="ai-status-card"><span class="kicker">MP4 EXPORT ENGINE</span><p id="exportStatus">Exports are H.264 video + AAC audio in MP4. Vertical exports preserve the full frame over a blurred background. The first export downloads the FFmpeg encoder; slower laptops may take several minutes.</p></div>
         <p id="notice" class="notice">AI suggestions are experimental and use speech transcription plus keyword clues. Review every suggested clip.</p>

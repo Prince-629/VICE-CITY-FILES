@@ -1,4 +1,4 @@
-const CACHE = 'vice-city-files-v5';
+const CACHE = 'vice-city-files-v6';
 const ASSETS = ['./', './index.html', './style.css', './app.js', './ai-worker.js', './manifest.webmanifest', './sw.js'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
 self.addEventListener('activate', event => event.waitUntil((async () => {
