@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#090b12"><meta name="description" content="VICE CITY FILES — your personal video clipping studio">
+<link rel="manifest" href="manifest.webmanifest"><link rel="stylesheet" href="style.css">
+<title>VICE CITY FILES</title>
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar"><a class="brand" href="#"><span class="brand-mark">VC</span><span>VICE CITY <b>FILES</b><small>PERSONAL CLIPPING STUDIO</small></span></a><button id="installBtn" class="ghost hidden">Install app</button></header>
+  <main>
+    <section class="hero">
+      <div class="eyebrow"><i></i> YOUR PRIVATE CLIPPING STUDIO</div>
+      <h1>Turn long videos<br><em>into moments.</em></h1>
+      <p>Bring the chaos. Find the highlights. Cut your story.</p>
+      <div class="hero-stats"><span><b>01</b> IMPORT</span><span><b>02</b> DISCOVER</span><span><b>03</b> EXPORT</span></div>
+    </section>
+    <section class="workspace">
+      <div class="section-head"><div><span class="kicker">WORKSPACE / 001</span><h2>New project</h2></div><span class="status-pill">LOCAL MODE</span></div>
+      <div class="import-card">
+        <div class="import-icon">↥</div><h3>Drop your footage here</h3><p>Choose a video stored on your device. Your file stays in this browser session.</p>
+        <label class="primary-btn" for="videoInput">Choose video <span>↗</span></label>
+        <input id="videoInput" type="file" accept="video/*" hidden>
+        <div class="or">OR</div>
+        <div class="url-row"><input id="videoUrl" placeholder="Paste an authorized video URL" type="url"><button id="urlBtn" class="secondary-btn">Add URL</button></div>
+        <small class="hint">URL import is a placeholder in this MVP. Upload a video file to begin.</small>
+      </div>
+      <div id="editor" class="editor hidden">
+        <div class="section-head compact"><div><span class="kicker">SOURCE FOOTAGE</span><h2 id="fileName">Your video</h2></div><button id="removeVideo" class="text-btn">Remove ×</button></div>
+        <video id="preview" controls playsinline></video>
+        <div class="settings-grid">
+          <div class="setting"><label>DETECTION MODE</label><select id="mode"><option value="auto">Fully automatic</option><option value="guided">Choose categories</option></select></div>
+          <div class="setting"><label>EXPORT FORMAT</label><select id="format"><option value="both">Vertical + landscape</option><option value="vertical">Vertical 9:16</option><option value="landscape">Landscape 16:9</option></select></div>
+        </div>
+        <div id="categories" class="categories"><label class="check"><input type="checkbox" value="Funny moments" checked> Funny moments</label><label class="check"><input type="checkbox" value="Crazy gameplay" checked> Crazy gameplay</label><label class="check"><input type="checkbox" value="Unexpected moments" checked> Unexpected moments</label><label class="check"><input type="checkbox" value="Reactions" checked> Reactions</label><label class="check"><input type="checkbox" value="Memorable dialogue" checked> Memorable dialogue</label></div>
+        <div class="section-head compact"><div><span class="kicker">CLIP CONTROLS</span><h2>Make a cut</h2></div><span class="muted" id="durationLabel">00:00</span></div>
+        <div class="trim-grid"><div class="setting"><label>START (SECONDS)</label><input id="startTime" type="number" min="0" step=".1" value="0"></div><div class="setting"><label>END (SECONDS)</label><input id="endTime" type="number" min="0" step=".1" value="15"></div></div>
+        <div class="setting title-setting"><label>CLIP TITLE</label><input id="clipTitle" value="Untitled moment" maxlength="70"></div>
+        <div class="actions"><button id="addClip" class="primary-btn">＋ Add to clip list</button><button id="detectBtn" class="secondary-btn">✦ Find moments</button></div>
+        <p id="notice" class="notice">AI moment detection is not connected yet. Add cuts manually or use the clearly labelled sample suggestions.</p>
+        <div class="section-head compact"><div><span class="kicker">YOUR EDITS</span><h2>Clip list <span id="clipCount" class="count">0</span></h2></div><button id="clearClips" class="text-btn">Clear all</button></div>
+        <div id="clipList" class="clip-list"><div class="empty">Your selected moments will appear here.</div></div>
+      </div>
+    </section>
+    <footer><span>VICE CITY FILES © 2026</span><span>BUILT FOR THE MOMENTS THAT MATTER.</span></footer>
+  </main>
+</div>
+<script src="app.js"></script>
+</body></html>
